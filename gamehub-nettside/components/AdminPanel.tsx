@@ -1,61 +1,67 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Release, Run } from '@/lib/github';
+import { upload } from '@vercel/blob/client';
+import type { Version } from '@/lib/versions';
 import { formatBytes, formatDate } from '@/lib/format';
 
-async function call(path: string, body: unknown): Promise<void> {
-  const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const json = (await res.json().catch(() => ({}))) as { error?: string };
-  if (!res.ok) throw new Error(json.error ?? `Feil ${res.status}`);
-}
-
-function runState(run: Run): { cls: string; text: string } {
-  if (run.status !== 'completed') return { cls: 'warn', text: run.status === 'queued' ? 'I kø' : 'Bygger …' };
-  if (run.conclusion === 'success') return { cls: 'ok', text: 'Ferdig' };
-  if (run.conclusion === 'cancelled') return { cls: '', text: 'Avbrutt' };
-  return { cls: 'danger', text: 'Feilet' };
-}
-
-/**
- * The admin panel. Everything here is a thin front on GitHub: publishing is a
- * version bump, notes are the release body, hiding is the pre-release flag.
- */
-export function AdminPanel({
-  repo,
-  hasToken,
-  releases,
-  runs,
-  currentVersion,
-  suggested,
-  error,
-}: {
-  repo: string;
-  hasToken: boolean;
-  releases: Release[];
-  runs: Run[];
-  currentVersion: string;
-  suggested: string;
-  error: string | null;
-}) {
+/** Upload a file, give it a version number, done. */
+export function AdminPanel({ versions, suggested, blobReady }: { versions: Version[]; suggested: string; blobReady: boolean }) {
   const router = useRouter();
+  const [file, setFile] = useState<File | null>(null);
   const [version, setVersion] = useState(suggested);
   const [notes, setNotes] = useState('');
-  const [busy, setBusy] = useState<string | null>(null);
+  const [percent, setPercent] = useState<number | null>(null);
   const [message, setMessage] = useState<{ kind: 'ok' | 'danger'; text: string } | null>(null);
-  const [editing, setEditing] = useState<number | null>(null);
-  const [draft, setDraft] = useState('');
+  const [over, setOver] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const input = useRef<HTMLInputElement>(null);
 
-  const building = runs.find((r) => r.status !== 'completed');
-  const pending = building && !releases.some((r) => r.version === currentVersion);
-
-  const act = async (key: string, work: () => Promise<void>, done: string) => {
-    setBusy(key);
+  const pick = (list: FileList | null) => {
+    const chosen = list?.[0] ?? null;
+    if (chosen && !chosen.name.toLowerCase().endsWith('.exe')) {
+      setMessage({ kind: 'danger', text: 'Velg .exe-filen (GameHub-Setup.exe).' });
+      return;
+    }
     setMessage(null);
+    setFile(chosen);
+  };
+
+  const publish = async () => {
+    if (!file) return setMessage({ kind: 'danger', text: 'Velg en fil først.' });
+    if (!/^\d+\.\d+\.\d+$/.test(version.trim())) return setMessage({ kind: 'danger', text: 'Versjonen må se ut som 1.2.3.' });
+    if (versions.some((v) => v.version === version.trim()) && !confirm(`Versjon ${version.trim()} finnes allerede. Erstatte den?`)) return;
+    setMessage(null);
+    setPercent(0);
     try {
-      await work();
-      setMessage({ kind: 'ok', text: done });
+      await upload(`releases/${version.trim()}/GameHub-Setup.exe`, file, {
+        access: 'public',
+        handleUploadUrl: '/api/upload',
+        contentType: 'application/octet-stream',
+        onUploadProgress: (p) => setPercent(p.percentage),
+      });
+      const res = await fetch('/api/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: version.trim(), notes }) });
+      if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? `Feil ${res.status}`);
+      setMessage({ kind: 'ok', text: `Versjon ${version.trim()} ligger ute nå. Forsiden er oppdatert.` });
+      setFile(null);
+      setNotes('');
+      if (input.current) input.current.value = '';
+      router.refresh();
+    } catch (e) {
+      setMessage({ kind: 'danger', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setPercent(null);
+    }
+  };
+
+  const remove = async (v: Version) => {
+    if (!confirm(`Slette versjon ${v.version}? Filen forsvinner fra nettsiden.`)) return;
+    setBusy(v.version);
+    try {
+      const res = await fetch('/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: v.version }) });
+      if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? `Feil ${res.status}`);
+      setMessage({ kind: 'ok', text: `Versjon ${v.version} er slettet.` });
       router.refresh();
     } catch (e) {
       setMessage({ kind: 'danger', text: e instanceof Error ? e.message : String(e) });
@@ -64,182 +70,77 @@ export function AdminPanel({
     }
   };
 
+  const uploading = percent !== null;
+
   return (
     <>
       <div className="row" style={{ margin: '10px 0 20px' }}>
-        <h1 style={{ fontSize: 28, fontWeight: 800 }}>Admin</h1>
-        <span className="pill accent">{repo}</span>
+        <h1 style={{ fontSize: 26, fontWeight: 800 }}>Legg ut ny versjon</h1>
         <span className="spacer" />
-        <button className="btn sm btn-ghost" onClick={() => router.refresh()}>
-          ↻ Oppdater
-        </button>
-        <form method="post" action="/api/admin/logout">
-          <button className="btn sm btn-ghost" type="submit">
-            Logg ut
-          </button>
-        </form>
+        <form method="post" action="/api/logout"><button className="btn sm btn-ghost" type="submit">Logg ut</button></form>
       </div>
 
-      {!hasToken && (
-        <div className="notice">
-          <strong>GITHUB_TOKEN mangler.</strong> Du kan se versjonene, men ikke publisere, skjule eller endre notater før den
-          er lagt inn i Vercel. Se OPPSKRIFT-NETTSIDE.md, del 3.
+      {!blobReady && (
+        <div className="notice danger">
+          Lagringen er ikke koblet til ennå. I Vercel: <strong>Storage → Create Database → Blob → Connect</strong> til dette prosjektet, så Redeploy. Se oppskriften.
         </div>
       )}
-      {error && <div className="notice danger">{error}</div>}
       {message && <div className={`notice ${message.kind}`}>{message.text}</div>}
 
-      <div className="admin-grid">
-        <div className="card glow">
-          <h3>Publiser ny versjon</h3>
-          <p className="notes" style={{ marginTop: 0, marginBottom: 14 }}>
-            Appen ligger på versjon <strong>{currentVersion || '?'}</strong>. Trykker du Publiser, endrer nettsiden
-            versjonstallet i GitHub for deg. GitHub bygger så installeren (10–15 min), legger den ut her, og alle som har
-            GameHub får beskjed om oppdateringen.
-          </p>
-          {pending && (
-            <div className="notice info">
-              Versjon {currentVersion} bygges akkurat nå. Vent til den er ferdig før du publiserer en ny.
-            </div>
+      <div className="card glow">
+        <label
+          className={`drop${over ? ' over' : ''}`}
+          onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(e) => { e.preventDefault(); setOver(false); pick(e.dataTransfer.files); }}
+        >
+          <input ref={input} type="file" accept=".exe" onChange={(e) => pick(e.target.files)} disabled={uploading} />
+          {file ? (
+            <><strong>{file.name}</strong>{formatBytes(file.size)} · klikk for å velge en annen</>
+          ) : (
+            <><strong>Slipp GameHub-Setup.exe her</strong>eller klikk for å velge filen</>
           )}
-          <div className="field">
-            <label htmlFor="version">Versjonsnummer</label>
-            <input id="version" type="text" value={version} onChange={(e) => setVersion(e.target.value)} placeholder={suggested} />
-            <span className="hint">Må være høyere enn {currentVersion || 'den forrige'}. Forslag: {suggested}</span>
-          </div>
-          <div className="field">
-            <label htmlFor="notes">Hva er nytt? (vises på nettsiden og i popupen i appen)</label>
-            <textarea
-              id="notes"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder={'- Replay tar nå opp lyd\n- Fikset at F7 ikke virket i noen spill\n\nEn linje som begynner med - blir et kulepunkt.'}
-            />
-          </div>
-          <button
-            className={`btn btn-accent${busy === 'publish' ? ' busy' : ''}`}
-            disabled={!hasToken || busy !== null || Boolean(pending)}
-            onClick={() =>
-              act(
-                'publish',
-                () => call('/api/admin/publish', { version: version.trim(), notes }),
-                `Versjon ${version.trim()} er sendt til GitHub. Følg med under «Bygging» — om 10–15 minutter ligger den ute.`,
-              ).then(() => setNotes(''))
-            }
-          >
-            🚀 Publiser {version.trim() || suggested}
-          </button>
+        </label>
+
+        <div className="field" style={{ marginTop: 16 }}>
+          <label htmlFor="version">Versjonsnummer</label>
+          <input id="version" type="text" value={version} onChange={(e) => setVersion(e.target.value)} disabled={uploading} />
+          <span className="hint">Høyeste tall blir den som vises på forsiden. Forslag: {suggested}</span>
+        </div>
+        <div className="field">
+          <label htmlFor="notes">Hva er nytt? (valgfritt)</label>
+          <textarea id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} disabled={uploading} placeholder="Replay tar nå opp lyd. Frys spillet med F7." />
         </div>
 
-        <div className="card">
-          <h3>Bygging</h3>
-          {runs.length === 0 ? (
-            <p className="notes" style={{ marginTop: 0 }}>
-              Ingen bygg ennå.
-            </p>
-          ) : (
-            runs.map((run) => {
-              const state = runState(run);
-              return (
-                <div className="run" key={run.id}>
-                  <span className={`dot ${state.cls}`} />
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.name}</span>
-                  <span className={`pill ${state.cls}`}>{state.text}</span>
-                  <a className="btn sm btn-ghost" href={run.url} target="_blank" rel="noopener">
-                    Åpne
-                  </a>
-                </div>
-              );
-            })
-          )}
-          <p className="hint" style={{ marginTop: 10, color: 'var(--faint)', fontSize: 13 }}>
-            Rødt? Åpne raden på GitHub og les det røde steget — det sier hva som mangler.
-          </p>
-        </div>
+        {uploading && (
+          <>
+            <div className="progress"><span style={{ width: `${percent}%` }} /></div>
+            <p className="hint">Laster opp … {Math.round(percent ?? 0)} %. Ikke lukk siden.</p>
+          </>
+        )}
+
+        <button className={`btn btn-accent${uploading ? ' busy' : ''}`} style={{ marginTop: 8 }} disabled={uploading || !blobReady} onClick={() => void publish()}>
+          🚀 Legg ut versjon {version.trim() || suggested}
+        </button>
       </div>
 
-      <h2 style={{ fontSize: 20, fontWeight: 700, margin: '28px 0 12px' }}>Versjoner som ligger ute</h2>
-      {releases.length === 0 ? (
-        <p className="empty">Ingen versjoner ennå. Den første kommer når bygget over er ferdig.</p>
-      ) : (
-        <div style={{ display: 'grid', gap: 12 }}>
-          {releases.map((release, i) => (
-            <div className="card" key={release.id} style={{ ['--i' as string]: i }}>
-              <div className="row">
-                <strong style={{ fontSize: 17 }}>GameHub {release.version}</strong>
-                {i === 0 && !release.prerelease && <span className="pill ok">Nyeste</span>}
-                {release.prerelease && <span className="pill warn">Skjult — vises ikke, og appen tilbyr den ikke</span>}
-                {!release.installer && <span className="pill danger">Mangler installer</span>}
-                <span className="spacer" />
-                <span style={{ color: 'var(--faint)', fontSize: 13 }}>
-                  {formatDate(release.publishedAt)}
-                  {release.installer ? ` · ${formatBytes(release.installer.size)} · ${release.installer.downloads} nedlastinger` : ''}
-                </span>
-              </div>
-
-              {editing === release.id ? (
-                <div style={{ marginTop: 12 }}>
-                  <textarea value={draft} onChange={(e) => setDraft(e.target.value)} />
-                  <div className="row" style={{ marginTop: 8 }}>
-                    <button
-                      className={`btn sm btn-accent${busy === `notes-${release.id}` ? ' busy' : ''}`}
-                      disabled={busy !== null}
-                      onClick={() =>
-                        act(`notes-${release.id}`, () => call('/api/admin/notes', { id: release.id, body: draft }), 'Notatene er lagret.').then(() =>
-                          setEditing(null),
-                        )
-                      }
-                    >
-                      Lagre
-                    </button>
-                    <button className="btn sm btn-ghost" onClick={() => setEditing(null)}>
-                      Avbryt
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <p className="notes" style={{ whiteSpace: 'pre-wrap' }}>
-                  {release.body.trim() || 'Ingen notater.'}
-                </p>
-              )}
-
-              <div className="row" style={{ marginTop: 12 }}>
-                {release.installer && (
-                  <a className="btn sm" href={release.installer.downloadUrl}>
-                    ⬇ Last ned
-                  </a>
-                )}
-                <button
-                  className="btn sm btn-ghost"
-                  disabled={!hasToken || busy !== null}
-                  onClick={() => {
-                    setDraft(release.body);
-                    setEditing(release.id);
-                  }}
-                >
-                  ✏️ Endre notater
-                </button>
-                <button
-                  className={`btn sm btn-ghost${busy === `vis-${release.id}` ? ' busy' : ''}`}
-                  disabled={!hasToken || busy !== null}
-                  onClick={() =>
-                    act(
-                      `vis-${release.id}`,
-                      () => call('/api/admin/visibility', { id: release.id, hidden: !release.prerelease }),
-                      release.prerelease ? `${release.version} vises igjen.` : `${release.version} er skjult. Folk får den forrige i stedet.`,
-                    )
-                  }
-                >
-                  {release.prerelease ? '👁 Vis igjen' : '🙈 Skjul'}
-                </button>
-                <a className="btn sm btn-ghost" href={release.url} target="_blank" rel="noopener">
-                  GitHub
-                </a>
-              </div>
+      <div className="card" style={{ marginTop: 16, ['--i' as string]: 1 }}>
+        <div className="label">Versjoner som ligger ute</div>
+        {versions.length === 0 ? (
+          <p className="notes" style={{ marginTop: 0 }}>Ingen ennå.</p>
+        ) : (
+          versions.map((v, i) => (
+            <div className="version-row" key={v.version}>
+              <strong>GameHub {v.version}</strong>
+              {i === 0 && <span className="pill">På forsiden</span>}
+              <span className="meta">{formatDate(v.uploadedAt)} · {formatBytes(v.size)}</span>
+              <span className="spacer" />
+              <a className="btn sm btn-ghost" href={v.url}>Last ned</a>
+              <button className={`btn sm btn-ghost btn-danger${busy === v.version ? ' busy' : ''}`} disabled={busy !== null || uploading} onClick={() => void remove(v)}>Slett</button>
             </div>
-          ))}
-        </div>
-      )}
+          ))
+        )}
+      </div>
     </>
   );
 }
