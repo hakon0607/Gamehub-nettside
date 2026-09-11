@@ -5,5 +5,8 @@ export function formatBytes(bytes: number): string {
 export function formatDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString('nb-NO', { day: 'numeric', month: 'long', year: 'numeric' });
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+export function formatCount(n: number): string {
+  return n.toLocaleString('en-GB');
 }
