@@ -63,8 +63,18 @@ export default async function Home() {
         </p>
       </div>
 
+      <div className="card" style={{ marginTop: 16, ['--i' as string]: 2 }}>
+        <div className="label">Privacy</div>
+        <p className="notes" style={{ marginTop: 0 }}>
+          GameHub has no account and never uploads your files. So the developer can see how many people use it, the app sends a small anonymous
+          message every five minutes while it runs: a random install id, version, language, whether the window is open, the game being played,
+          how many games you have and from which launchers, your Windows version, and how many times each feature was used. No name, no file paths.
+          Your IP address is not stored — only the country.
+        </p>
+      </div>
+
       {all.length > 0 && (
-        <div className="card" style={{ marginTop: 16, ['--i' as string]: 2 }}>
+        <div className="card" style={{ marginTop: 16, ['--i' as string]: 3 }}>
           <div className="label">All versions</div>
           {all.map((r) => (
             <div key={r.version} className="version-row">
