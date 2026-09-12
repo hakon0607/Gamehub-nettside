@@ -20,7 +20,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="page">
           <a href="/" className="brand"><img src="/logo.svg" alt="" width={32} height={32} className="brand-logo" /> GameHub</a>
           {children}
-          <footer>GameHub for Windows 10 and 11 · free · open source · <a href="https://github.com/hakon0607/Gamehub">GitHub</a></footer>
+          <footer>
+            GameHub for Windows 10 and 11 · free · open source (MIT) ·{' '}
+            <a href="https://github.com/hakon0607/Gamehub">GitHub</a>
+            <br />
+            <a href="/terms">Terms of Service</a> · <a href="/privacy">Privacy policy</a> ·{' '}
+            <a href="mailto:hakon.solvik@hotmail.com">hakon.solvik@hotmail.com</a>
+          </footer>
         </div>
       </body>
     </html>

@@ -67,9 +67,14 @@ export default async function Home() {
         <div className="label">Privacy</div>
         <p className="notes" style={{ marginTop: 0 }}>
           GameHub has no account and never uploads your files. So the developer can see how many people use it, the app sends a small anonymous
-          message every five minutes while it runs: a random install id, version, language, whether the window is open, the game being played,
-          how many games you have and from which launchers, your Windows version, and how many times each feature was used. No name, no file paths.
-          Your IP address is not stored — only the country.
+          message every five minutes while it runs — but only if you turn it on. It carries a random install id, version, language,
+          whether the window is open, the game being played, how many games you have and from which launchers, your Windows version,
+          and how many times each feature was used. No name, no file paths.
+          Your IP address is not stored — only the country. It is off until you switch it on, and everything
+          works the same if you never do.
+        </p>
+        <p className="notes">
+          <a href="/privacy">Read the full privacy policy</a> · <a href="/terms">Terms of Service</a>
         </p>
       </div>
 
